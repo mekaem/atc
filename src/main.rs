@@ -5,6 +5,7 @@ mod config;
 mod dns;
 mod error;
 mod feed;
+mod jetstream;
 mod secrets;
 
 fn main() {
