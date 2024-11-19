@@ -6,6 +6,7 @@ mod dns;
 mod error;
 mod feed;
 mod jetstream;
+mod ozone;
 mod secrets;
 
 fn main() {
