@@ -13,8 +13,14 @@ pub enum Error {
     #[error("{}", format_error("TOML error", .0.to_string()))]
     Toml(#[from] toml::de::Error),
 
+    #[error("{}", format_error("Docker error", .0))]
+    Docker(String),
+
     #[error("{}", format_error("Network error", .0))]
     Network(String),
+
+    #[error("{}", format_error("YAML error", .0))]
+    Yaml(String),
 
     #[error("{}", format_error("Certificate error", .0))]
     Cert(String),
