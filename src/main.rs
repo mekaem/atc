@@ -7,6 +7,7 @@ mod dns;
 mod docker;
 mod error;
 mod feed;
+mod health;
 mod jetstream;
 mod ozone;
 mod secrets;
