@@ -1,4 +1,5 @@
 mod api;
+mod caddy;
 mod certs;
 mod config;
 mod dns;
