@@ -15,6 +15,12 @@ pub enum Error {
 
     #[error("{}", format_error("Certificate error", .0))]
     Cert(String),
+
+    #[error("{}", format_error("API error", .0))]
+    Api(String),
+
+    #[error("{}", format_error("JSON error", .0.to_string()))]
+    Json(#[from] serde_json::Error),
 }
 
 fn format_error(error_type: &str, message: impl AsRef<str>) -> String {

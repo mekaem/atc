@@ -1,3 +1,4 @@
+mod api;
 mod certs;
 mod config;
 mod error;
