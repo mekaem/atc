@@ -1,6 +1,7 @@
 mod api;
 mod certs;
 mod config;
+mod dns;
 mod error;
 mod secrets;
 
