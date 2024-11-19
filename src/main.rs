@@ -11,6 +11,7 @@ mod health;
 mod jetstream;
 mod ozone;
 mod secrets;
+mod status;
 
 fn main() {
     tracing_subscriber::fmt::init();
