@@ -4,6 +4,7 @@ mod certs;
 mod config;
 mod dns;
 mod error;
+mod feed;
 mod secrets;
 
 fn main() {
