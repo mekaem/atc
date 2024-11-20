@@ -73,7 +73,7 @@ impl CertManager {
             let status = Command::new("sudo")
                 .arg("cp")
                 .arg(cert_path)
-                .arg("/usr/local/share/ca-certificates/rsky-root.crt")
+                .arg("/usr/local/share/ca-certificates/atc-root.crt")
                 .status()
                 .await
                 .map_err(|e| Error::Cert(format!("Failed to copy certificate: {}", e)))?;

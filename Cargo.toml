@@ -1,7 +1,9 @@
 [package]
-name = "rsky"
+name = "atc"
 version = "0.1.0"
 edition = "2021"
+authors = ["@mekaem"]
+description = "A CLI tool for managing self-hosted Bluesky infrastructure"
 license = "MPL-2.0"
 
 [dependencies]
