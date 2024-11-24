@@ -1,4 +1,5 @@
 use crate::{
+    certs::CertManager,
     cli::Commands,
     config::Config,
     dns::DnsChecker,

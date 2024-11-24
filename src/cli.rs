@@ -17,6 +17,9 @@ pub struct Cli {
 pub enum Commands {
     /// Check environment readiness
     Check(CheckArgs),
+
+    /// Manage certificates
+    Certs(CertArgs),
 }
 
 #[derive(Args, Debug)]
@@ -28,4 +31,9 @@ pub struct CheckArgs {
     /// Skip Docker checks
     #[arg(long)]
     pub no_docker: bool,
+}
+pub struct CertArgs {
+    /// Generate and install self-signed certificates
+    #[arg(long)]
+    pub self_signed: bool,
 }
