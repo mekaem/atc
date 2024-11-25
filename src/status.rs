@@ -1,3 +1,4 @@
+use crate::docker::DockerServiceTrait;
 use crate::error::Result;
 use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
@@ -22,12 +23,12 @@ pub struct SystemStatus {
     pub timestamp: OffsetDateTime,
 }
 
-pub struct StatusManager {
-    docker: crate::docker::DockerService,
+pub struct StatusManager<T: DockerServiceTrait> {
+    docker: T,
 }
 
-impl StatusManager {
-    pub fn new(docker: crate::docker::DockerService) -> Self {
+impl<T: DockerServiceTrait> StatusManager<T> {
+    pub fn new(docker: T) -> Self {
         Self { docker }
     }
 
@@ -118,7 +119,6 @@ impl StatusManager {
             }
         }
 
-        // Format timestamp using time's formatting
         println!(
             "\nLast Updated: {}",
             status
@@ -133,55 +133,172 @@ impl StatusManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert_fs::prelude::*;
+    use crate::docker::{mock::MockDockerService, ServiceStatus as DockerServiceStatus};
+
+    async fn setup_mock_docker() -> MockDockerService {
+        let docker = MockDockerService::new();
+
+        // Set up some mock services
+        docker
+            .set_service_status(
+                "pds",
+                DockerServiceStatus {
+                    running: true,
+                    state: "running".to_string(),
+                    ports: vec!["3000:3000".to_string()],
+                },
+            )
+            .await;
+
+        docker
+            .set_service_status(
+                "plc",
+                DockerServiceStatus {
+                    running: true,
+                    state: "running".to_string(),
+                    ports: vec!["2582:2582".to_string()],
+                },
+            )
+            .await;
+
+        docker
+            .set_service_status(
+                "bgs",
+                DockerServiceStatus {
+                    running: false,
+                    state: "exited".to_string(),
+                    ports: vec![],
+                },
+            )
+            .await;
+
+        docker
+    }
 
     #[tokio::test]
     async fn test_status_manager() {
-        // Create a temporary compose file
-        let temp = assert_fs::TempDir::new().unwrap();
-        let compose_path = temp.child("docker-compose.yml");
-
-        // Create a basic compose configuration
-        let mut compose = crate::compose::ComposeConfig::new();
-        compose.add_pds("test.com");
-        compose.save(&compose_path).unwrap();
-
-        // Create StatusManager
-        let docker = crate::docker::DockerService::new(compose_path.to_str().unwrap());
+        let docker = setup_mock_docker().await;
         let status_manager = StatusManager::new(docker);
 
-        // Get status
         let system_status = status_manager.get_status(true).await.unwrap();
 
-        // Basic assertions
-        assert!(system_status.services.contains_key("pds"));
-        assert!(system_status.timestamp <= OffsetDateTime::now_utc());
+        // Verify PDS service status
+        let pds_status = system_status.services.get("pds").unwrap();
+        assert!(pds_status.running);
+        assert_eq!(pds_status.name, "pds");
+
+        // Verify BGS service status (not running)
+        let bgs_status = system_status.services.get("bgs").unwrap();
+        assert!(!bgs_status.running);
     }
 
     #[tokio::test]
     async fn test_service_details() {
-        let temp = assert_fs::TempDir::new().unwrap();
-        let compose_path = temp.child("docker-compose.yml");
-
-        // Create a more complete compose configuration
-        let mut compose = crate::compose::ComposeConfig::new();
-        compose
-            .add_pds("test.com")
-            .add_plc()
-            .add_bgs()
-            .add_appview();
-        compose.save(&compose_path).unwrap();
-
-        let docker = crate::docker::DockerService::new(compose_path.to_str().unwrap());
+        let docker = setup_mock_docker().await;
         let status_manager = StatusManager::new(docker);
 
-        // Get verbose status
+        // Test verbose mode
         let system_status = status_manager.get_status(true).await.unwrap();
 
-        // Check all core services are present
-        assert!(system_status.services.contains_key("pds"));
-        assert!(system_status.services.contains_key("plc"));
-        assert!(system_status.services.contains_key("bgs"));
-        assert!(system_status.services.contains_key("appview"));
+        // Check for detailed port information
+        let pds_status = system_status.services.get("pds").unwrap();
+        assert!(pds_status.details.get("port_0").unwrap().contains("3000"));
+
+        // Test non-verbose mode
+        let system_status = status_manager.get_status(false).await.unwrap();
+        let pds_status = system_status.services.get("pds").unwrap();
+        assert!(pds_status.details.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_accuracy() {
+        let docker = setup_mock_docker().await;
+        let status_manager = StatusManager::new(docker);
+
+        let before = OffsetDateTime::now_utc();
+        let system_status = status_manager.get_status(false).await.unwrap();
+        let after = OffsetDateTime::now_utc();
+
+        assert!(system_status.timestamp >= before);
+        assert!(system_status.timestamp <= after);
+    }
+
+    #[tokio::test]
+    async fn test_all_core_services_present() {
+        let docker = setup_mock_docker().await;
+        let status_manager = StatusManager::new(docker);
+
+        let system_status = status_manager.get_status(false).await.unwrap();
+
+        // Check that all core services are present in the status
+        let core_services = [
+            "pds",
+            "plc",
+            "appview",
+            "bgs",
+            "social-app",
+            "ozone",
+            "feed-generator",
+            "jetstream",
+        ];
+
+        for service in core_services.iter() {
+            assert!(
+                system_status.services.contains_key(*service),
+                "Missing core service: {}",
+                service
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verbose_output_format() {
+        let docker = setup_mock_docker().await;
+        let status_manager = StatusManager::new(docker);
+
+        let system_status = status_manager.get_status(true).await.unwrap();
+
+        // Check PDS service details
+        let pds_status = system_status.services.get("pds").unwrap();
+        assert!(pds_status.details.contains_key("state"));
+        assert!(pds_status.details.contains_key("port_0"));
+        assert_eq!(pds_status.details.get("state").unwrap(), "running");
+        assert_eq!(pds_status.details.get("port_0").unwrap(), "3000:3000");
+
+        // Check BGS service details (not running)
+        let bgs_status = system_status.services.get("bgs").unwrap();
+        assert_eq!(bgs_status.details.get("state").unwrap(), "exited");
+        assert!(!bgs_status.details.contains_key("port_0"));
+    }
+
+    #[tokio::test]
+    async fn test_service_health_tracking() {
+        let docker = setup_mock_docker().await;
+        let status_manager = StatusManager::new(docker);
+
+        let system_status = status_manager.get_status(true).await.unwrap();
+
+        // Initially all services should be marked as not healthy
+        for (_, status) in system_status.services.iter() {
+            assert!(
+                !status.healthy,
+                "Service {} should initially be marked as not healthy",
+                status.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_empty_service_status() {
+        let docker = MockDockerService::new();
+        let status_manager = StatusManager::new(docker);
+
+        let system_status = status_manager.get_status(true).await.unwrap();
+
+        // All services should be present but marked as not running
+        for (_, status) in system_status.services.iter() {
+            assert!(!status.running);
+            assert!(status.details.is_empty());
+        }
     }
 }
