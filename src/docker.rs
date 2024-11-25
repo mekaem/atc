@@ -1,14 +1,35 @@
 use crate::error::{Error, Result};
 use crate::secrets::Secrets;
+use async_trait::async_trait;
+use serde::Deserialize;
 use std::process::Stdio;
 use std::{collections::HashMap, path::Path};
 use tokio::process::Command;
 use tracing::{debug, instrument};
 
+#[async_trait]
+pub trait DockerServiceTrait {
+    async fn get_service_status(&self) -> Result<HashMap<String, ServiceStatus>>;
+}
+
 #[derive(Debug)]
 pub struct DockerService {
     compose_file: String,
     env_vars: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServiceStatus {
+    pub running: bool,
+    pub state: String,
+    pub ports: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerComposeService {
+    name: String,
+    state: String,
+    ports: Vec<String>,
 }
 
 impl DockerService {
@@ -143,38 +164,49 @@ impl DockerService {
     }
 }
 
-#[derive(Debug)]
-pub struct ServiceStatus {
-    pub running: bool,
-    pub state: String,
-    pub ports: Vec<String>,
+#[async_trait]
+impl DockerServiceTrait for DockerService {
+    async fn get_service_status(&self) -> Result<HashMap<String, ServiceStatus>> {
+        self.get_service_status().await
+    }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct DockerComposeService {
-    name: String,
-    state: String,
-    ports: Vec<String>,
+#[cfg(test)]
+pub mod mock {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[derive(Debug, Clone, Default)]
+    pub struct MockDockerService {
+        services: Arc<Mutex<HashMap<String, ServiceStatus>>>,
+    }
+
+    impl MockDockerService {
+        pub fn new() -> Self {
+            Self {
+                services: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+
+        pub async fn set_service_status(&self, name: &str, status: ServiceStatus) {
+            let mut services = self.services.lock().await;
+            services.insert(name.to_string(), status);
+        }
+    }
+
+    #[async_trait]
+    impl DockerServiceTrait for MockDockerService {
+        async fn get_service_status(&self) -> Result<HashMap<String, ServiceStatus>> {
+            let services = self.services.lock().await;
+            Ok(services.clone())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert_fs::prelude::*;
-
-    fn create_test_compose_file() -> assert_fs::NamedTempFile {
-        let file = assert_fs::NamedTempFile::new("docker-compose.yml").unwrap();
-        file.write_str(
-            r#"
-                    version: '3.8'
-                    services:
-                    test-service:
-                        image: hello-world
-                "#,
-        )
-        .unwrap();
-        file
-    }
 
     #[tokio::test]
     async fn test_docker_service_creation() {
@@ -193,8 +225,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dependency_check() {
-        // This test assumes Docker and Docker Compose are installed
-        DockerService::check_dependencies().await.unwrap();
+    async fn test_mock_docker_service() {
+        let docker = mock::MockDockerService::new();
+
+        // Set up test service
+        docker
+            .set_service_status(
+                "test-service",
+                ServiceStatus {
+                    running: true,
+                    state: "running".to_string(),
+                    ports: vec!["8080:80".to_string()],
+                },
+            )
+            .await;
+
+        // Get status and verify
+        let statuses = docker.get_service_status().await.unwrap();
+        let test_service = statuses.get("test-service").unwrap();
+        assert!(test_service.running);
+        assert_eq!(test_service.state, "running");
+        assert_eq!(test_service.ports[0], "8080:80");
     }
 }
