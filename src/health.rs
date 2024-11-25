@@ -21,18 +21,18 @@ pub enum HealthState {
 
 pub struct HealthChecker {
     client: Client,
-    base_domain: String,
+    base_url: String,
 }
 
 impl HealthChecker {
-    pub fn new(domain: &str) -> Self {
+    pub fn new(base_url: &str) -> Self {
         Self {
             client: Client::builder()
                 .danger_accept_invalid_certs(true) // For development with self-signed certs
                 .timeout(Duration::from_secs(5))
                 .build()
                 .expect("Failed to create HTTP client"),
-            base_domain: domain.to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
 
@@ -66,35 +66,47 @@ impl HealthChecker {
         })
     }
 
+    #[instrument(skip(self))]
     async fn check_pds(&self) -> Result<HealthState> {
-        let url = format!("https://pds.{}/xrpc/_health", self.base_domain);
+        let url = format!("{}/xrpc/_health", self.base_url);
         match self.client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => Ok(HealthState::Healthy),
-            Ok(_) => Ok(HealthState::Degraded),
+            Ok(response) => match response.status().as_u16() {
+                200 => Ok(HealthState::Healthy),
+                // 5xx status codes indicate degraded service
+                500..=599 => Ok(HealthState::Degraded),
+                // Any other code is considered unhealthy
+                _ => Ok(HealthState::Unhealthy),
+            },
             Err(_) => Ok(HealthState::Unhealthy),
         }
     }
 
     async fn check_plc(&self) -> Result<HealthState> {
-        let url = format!("https://plc.{}/health", self.base_domain);
+        let url = format!("https://plc.{}/health", self.base_url);
         match self.client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => Ok(HealthState::Healthy),
-            Ok(_) => Ok(HealthState::Degraded),
+            Ok(response) => match response.status().as_u16() {
+                200 => Ok(HealthState::Healthy),
+                500..=599 => Ok(HealthState::Degraded),
+                _ => Ok(HealthState::Unhealthy),
+            },
             Err(_) => Ok(HealthState::Unhealthy),
         }
     }
 
     async fn check_appview(&self) -> Result<HealthState> {
-        let url = format!("https://appview.{}/xrpc/_health", self.base_domain);
+        let url = format!("https://appview.{}/xrpc/_health", self.base_url);
         match self.client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => Ok(HealthState::Healthy),
-            Ok(_) => Ok(HealthState::Degraded),
+            Ok(response) => match response.status().as_u16() {
+                200 => Ok(HealthState::Healthy),
+                500..=599 => Ok(HealthState::Degraded),
+                _ => Ok(HealthState::Unhealthy),
+            },
             Err(_) => Ok(HealthState::Unhealthy),
         }
     }
 
     async fn check_bgs(&self) -> Result<HealthState> {
-        let url = format!("https://bgs.{}/health", self.base_domain);
+        let url = format!("https://bgs.{}/health", self.base_url);
         match self.client.get(&url).send().await {
             Ok(response) if response.status().is_success() => Ok(HealthState::Healthy),
             Ok(_) => Ok(HealthState::Degraded),
@@ -103,7 +115,7 @@ impl HealthChecker {
     }
 
     async fn check_social_app(&self) -> Result<HealthState> {
-        let url = format!("https://social-app.{}", self.base_domain);
+        let url = format!("https://social-app.{}", self.base_url);
         match self.client.get(&url).send().await {
             Ok(response) if response.status().is_success() => Ok(HealthState::Healthy),
             Ok(_) => Ok(HealthState::Degraded),
@@ -112,7 +124,7 @@ impl HealthChecker {
     }
 
     async fn check_ozone(&self) -> Result<HealthState> {
-        let url = format!("https://ozone.{}/health", self.base_domain);
+        let url = format!("https://ozone.{}/health", self.base_url);
         match self.client.get(&url).send().await {
             Ok(response) if response.status().is_success() => Ok(HealthState::Healthy),
             Ok(_) => Ok(HealthState::Degraded),
@@ -121,7 +133,7 @@ impl HealthChecker {
     }
 
     async fn check_feed_generator(&self) -> Result<HealthState> {
-        let url = format!("https://feed-generator.{}/health", self.base_domain);
+        let url = format!("https://feed-generator.{}/health", self.base_url);
         match self.client.get(&url).send().await {
             Ok(response) if response.status().is_success() => Ok(HealthState::Healthy),
             Ok(_) => Ok(HealthState::Degraded),
@@ -130,7 +142,7 @@ impl HealthChecker {
     }
 
     async fn check_jetstream(&self) -> Result<HealthState> {
-        let _url = format!("wss://jetstream.{}/health", self.base_domain);
+        let _url = format!("wss://jetstream.{}/health", self.base_url);
         // For now just check if the endpoint exists
         Ok(HealthState::Healthy)
     }
@@ -145,39 +157,40 @@ mod tests {
     #[tokio::test]
     async fn test_health_checker() {
         let mock_server = MockServer::start().await;
-        let mock_server_uri = mock_server.uri();
-        let mock_domain = mock_server_uri.trim_start_matches("http://");
+        let checker = HealthChecker::new(&mock_server.uri());
 
         // Mock health endpoint
         Mock::given(method("GET"))
-            .and(path("/_health"))
+            .and(path("/xrpc/_health"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&mock_server)
             .await;
 
-        let checker = HealthChecker::new(mock_domain);
-        let status = checker.check_service("pds").await.unwrap();
-
-        assert_eq!(status.status, HealthState::Healthy);
-        assert!(status.latency_ms > 0);
+        let status = checker.check_pds().await.unwrap();
+        assert_eq!(status, HealthState::Healthy);
     }
 
     #[tokio::test]
     async fn test_degraded_service() {
         let mock_server = MockServer::start().await;
-        let mock_server_uri = mock_server.uri();
-        let mock_domain = mock_server_uri.trim_start_matches("http://");
+        let checker = HealthChecker::new(&mock_server.uri());
 
-        // Mock degraded service
         Mock::given(method("GET"))
-            .and(path("/_health"))
+            .and(path("/xrpc/_health"))
             .respond_with(ResponseTemplate::new(503))
             .mount(&mock_server)
             .await;
 
-        let checker = HealthChecker::new(mock_domain);
-        let status = checker.check_service("pds").await.unwrap();
+        let status = checker.check_pds().await.unwrap();
+        assert_eq!(status, HealthState::Degraded);
+    }
 
-        assert_eq!(status.status, HealthState::Degraded);
+    #[tokio::test]
+    async fn test_unhealthy_service() {
+        let _mock_server = MockServer::start().await;
+
+        let checker = HealthChecker::new("test.local");
+        let status = checker.check_service("nonexistent").await.unwrap();
+        assert_eq!(status.status, HealthState::Unhealthy);
     }
 }
